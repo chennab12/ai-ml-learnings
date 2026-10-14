@@ -5,6 +5,7 @@ from calculations import shuffled_options
 from content import FAST_TRACK, GLOSSARY, SKILL_LADDER, STAGE_LEVELS, STAGES
 from lab_pages import LABS
 from practice import PRACTICE, TIPS
+from prerequisites import PREREQS
 from resources import KINDS, LEVELS, RESOURCES
 
 
@@ -98,3 +99,15 @@ def test_every_stage_has_practice_layer():
 def test_every_concept_has_tips():
     assert set(TIPS) == {t["title"] for t in all_topics()}
     assert all(len(v) >= 2 for v in TIPS.values())
+
+
+def test_every_stage_has_prerequisites_that_resolve():
+    titles = [s["title"] for s in STAGES]
+    assert set(PREREQS) == set(titles)
+    for i, title in enumerate(titles):
+        rows = PREREQS[title]
+        assert len(rows) >= 3, title
+        for r in rows:
+            assert r["topic"] and r["core"] and r["takeaway"], (title, r["topic"])
+            # Learn from a resource, or from an EARLIER stage only (the path goes basics → advanced).
+            assert r["learn"] in RESOURCES or r["learn"] in titles[:i], (title, r["learn"])

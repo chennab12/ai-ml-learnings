@@ -110,3 +110,9 @@ def test_every_stage_lab_responds_to_input():
     at.select_slider(key="lab_gd_lr").set_value(1.0).run()
     assert not at.exception, at.exception
     assert any("too large" in e.value for e in at.error)
+
+
+def test_prerequisite_review_button_goes_to_earlier_stage():
+    at = run(STAGES[4]["name"])
+    [b for b in at.button if b.label == f"↩️ Review {STAGES[3]['name']}"][0].click().run()
+    assert at.session_state["section"] == STAGES[3]["name"]
