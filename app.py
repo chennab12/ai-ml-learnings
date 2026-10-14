@@ -1,8 +1,11 @@
 """AI/ML TPM Learning Hub: the highest-ROI AI/ML learning path for a TPM growing from beginner to senior."""
 import csv
 import io
+import json
 import random
+import re
 from datetime import date, timedelta
+from functools import partial
 
 import streamlit as st
 
@@ -15,6 +18,7 @@ from calculations import (
     model_memory_gb,
     project_roi,
     quiz_score,
+    review_load,
     shuffled_options,
     study_schedule,
     tokens_to_words,
@@ -23,10 +27,14 @@ from calculations import (
     words_to_tokens,
 )
 from content import FAST_TRACK, GLOSSARY, REVIEWED, SKILL_LADDER, STAGE_LEVELS, STAGES, TOP_20_NOTE
+from lab_pages import LABS, lab_schedule
+from practice import PRACTICE, TIPS
 from resources import KINDS, LEVELS, RESOURCES
 from visuals import show
 
 st.set_page_config(page_title="AI/ML TPM Learning Hub", page_icon="🤖", layout="wide")
+# Bars keep the order of the data (Streamlit sorts category labels alphabetically by default).
+bar_chart = partial(st.bar_chart, sort=False)
 
 HOME = "🏠 Start here"
 ROADMAP = "🗺️ Roadmap & skill ladder"
@@ -37,8 +45,11 @@ CERTS = "🏅 Certification guide"
 QUIZ = "📝 Quiz center"
 PLAN = "🗓️ My learning plan"
 CALCULATORS = "🧮 Calculators"
+SEARCH = "🔎 Search everything"
 ABOUT = "ℹ️ About & method"
-SECTIONS = [HOME, ROADMAP, CHEATSHEET] + STAGE_NAMES + [LIBRARY, CERTS, QUIZ, PLAN, CALCULATORS, ABOUT]
+SECTIONS = [HOME, ROADMAP, CHEATSHEET] + STAGE_NAMES + [LIBRARY, CERTS, QUIZ, PLAN, CALCULATORS, SEARCH, ABOUT]
+SLUGS = {name: re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") for name in SECTIONS}
+BY_SLUG = {slug: name for name, slug in SLUGS.items()}
 CALCS = [
     "🎯 Precision & recall",
     "💸 LLM cost",
@@ -48,6 +59,8 @@ CALCS = [
     "📈 AI project ROI",
     "🦾 Agent reliability",
     "⏱️ Study time",
+    "🎲 Schedule risk (P50/P80)",
+    "👥 Human review load",
 ]
 TOPICS = [(s, t) for s in STAGES for t in s["topics"]]
 QUESTIONS = [{**item, "stage": s["name"], "level": s["level"], "topic": t["title"]} for s, t in TOPICS for item in t["quiz"]]
@@ -56,13 +69,17 @@ RESOURCE_STAGES = {k: [s["name"] for s in STAGES if any(k in t["resources"] for 
 LEVEL_BADGE = {"🟢 Basics": "🟢", "🟡 Intermediate": "🟡", "🔴 Advanced": "🔴"}
 HOURS_PER_STAGE_WEEK = 5  # suggested stage durations assume about 5 study hours a week
 
-st.session_state.setdefault("section", HOME)
+if "section" not in st.session_state:
+    # Deep links: ?page=generative-ai-llms opens that section directly.
+    st.session_state.section = BY_SLUG.get(st.query_params.get("page", ""), HOME)
 st.session_state.setdefault("done", set())
 st.session_state.setdefault("finished", set())
 st.session_state.setdefault("plan", [])
 st.session_state.setdefault("quiz_seed", 0)
 st.session_state.setdefault("quiz_history", [])
 st.session_state.setdefault("quiz_stages", [])
+st.session_state.setdefault("missed", set())
+st.session_state.setdefault("quiz_stats", {})
 
 
 def go_to(section):
@@ -98,6 +115,38 @@ def to_csv(rows):
     writer.writeheader()
     writer.writerows(rows)
     return out.getvalue()
+
+
+def progress_json():
+    return json.dumps({
+        "done": sorted(st.session_state.done), "finished": sorted(st.session_state.finished), "plan": st.session_state.plan,
+        "quiz_history": st.session_state.quiz_history, "missed": sorted(st.session_state.missed), "quiz_stats": st.session_state.quiz_stats,
+    }, indent=1)
+
+
+def load_progress():
+    upload = st.session_state.get("progress_upload")
+    if upload is None:
+        return
+    try:
+        data = json.loads(upload.getvalue())
+    except (ValueError, UnicodeDecodeError):
+        st.session_state.load_error = True
+        return
+    titles = {t["title"] for _, t in TOPICS}
+    questions = {q["q"] for q in QUESTIONS}
+    st.session_state.done = {t for t in data.get("done", []) if t in titles}
+    st.session_state.finished = {k for k in data.get("finished", []) if k in RESOURCES}
+    st.session_state.plan = [k for k in data.get("plan", []) if k in PLANNABLE]
+    st.session_state.quiz_history = [tuple(x) for x in data.get("quiz_history", []) if len(x) == 2]
+    st.session_state.missed = {q for q in data.get("missed", []) if q in questions}
+    st.session_state.quiz_stats = {k: v for k, v in data.get("quiz_stats", {}).items() if k in STAGE_NAMES}
+    st.session_state.load_error = False
+
+
+def next_concept():
+    """First concept, in path order, not yet marked as mastered."""
+    return next(((s, t) for s, t in TOPICS if t["title"] not in st.session_state.done), None)
 
 
 def pct(x):
@@ -151,6 +200,14 @@ with st.sidebar:
     st.title("🤖 AI/ML TPM Hub")
     st.radio("Section", SECTIONS, key="section")
     sidebar_progress = st.empty()
+    with st.expander("💾 Save or restore progress"):
+        st.caption("Progress lives in this browser session only. Download it, then upload it next time to pick up where you left off.")
+        st.download_button("⬇️ Download my progress", progress_json(), file_name="ai-ml-tpm-progress.json", mime="application/json")
+        st.file_uploader("Restore from a progress file", type="json", key="progress_upload", on_change=load_progress)
+        if st.session_state.get("load_error"):
+            st.error("That file couldn't be read. Upload a progress file downloaded from this app.")
+
+st.query_params["page"] = SLUGS[st.session_state.section]
 
 st.title("🤖 AI/ML TPM Learning Hub")
 st.caption(f"From beginner AI/ML TPM to senior technical AI/ML TPM · {len(STAGES)} stages · {len(TOPICS)} core concepts · reviewed {REVIEWED}")
@@ -169,6 +226,19 @@ def render_home():
     st.subheader("🚦 How to use it in 30 minutes a day")
     show("30 minutes a day", ["Open the next concept", "Read gist & plain words", "Run one experiment", "Take the quick check", "Learn from one resource", "Track one metric"])
     progress()
+    nxt = next_concept()
+    if nxt:
+        s, t = nxt
+        st.button(f"▶️ Continue where you left off: {s['icon']} {s['title']} → {t['icon']} {t['title']}", on_click=go_to, args=(s["name"],), type="primary")
+    else:
+        st.success("🏆 You've mastered all 30 concepts. Keep sharp with the Quiz center and your portfolio.")
+    st.dataframe(
+        [{"Level": s["level"], "Stage": s["name"], "Mastered": sum(t["title"] in st.session_state.done for t in s["topics"]) / len(s["topics"]),
+          "Quiz accuracy": (lambda c: c[0] / c[1] if c else None)(st.session_state.quiz_stats.get(s["name"]))} for s in STAGES],
+        hide_index=True, width="stretch",
+        column_config={"Mastered": st.column_config.ProgressColumn("Concepts mastered", format="percent", min_value=0, max_value=1),
+                       "Quiz accuracy": st.column_config.ProgressColumn("Quiz accuracy", format="percent", min_value=0, max_value=1)},
+    )
 
     st.subheader("🧗 The path: basics → intermediate → advanced")
     cols = st.columns(3)
@@ -207,7 +277,7 @@ def render_roadmap():
     b.metric("Total study hours", f"≈ {sum(s['weeks'] for s in STAGES) * HOURS_PER_STAGE_WEEK}")
     c.metric("Path finishes", rows[-1]["Finish"].strftime("%b %d, %Y"))
     st.dataframe(rows, hide_index=True, width="stretch")
-    st.bar_chart({"Stage": [r["Stage"] for r in rows], "Weeks": [r["Weeks ≈"] for r in rows]}, x="Stage", y="Weeks", horizontal=True)
+    bar_chart({"Stage": [r["Stage"] for r in rows], "Weeks": [r["Weeks ≈"] for r in rows]}, x="Stage", y="Weeks", horizontal=True)
     st.download_button("⬇️ Download my roadmap (CSV)", to_csv(rows), file_name="ai-ml-tpm-roadmap.csv", mime="text/csv")
 
     st.subheader("🪜 Beginner → senior technical AI/ML TPM")
@@ -220,7 +290,7 @@ def render_roadmap():
             scores.append(right.slider("My level", 1, 5, 2, key=f"ladder_{i}"))
     avg = sum(scores) / len(scores)
     st.metric("Average skill level", f"{avg:.1f} / 5", delta=f"{avg - 5:.1f} to senior")
-    st.bar_chart({"Skill": [s[0] for s in SKILL_LADDER], "My level": scores}, x="Skill", y="My level")
+    bar_chart({"Skill": [s[0] for s in SKILL_LADDER], "My level": scores}, x="Skill", y="My level")
     gaps = sorted(zip(scores, [s[0] for s in SKILL_LADDER]))[:2]
     st.success("🎯 **Focus next on:** " + " and ".join(name for _, name in gaps))
 
@@ -235,6 +305,7 @@ def render_cheatsheet():
             "Concept": f"{t['icon']} {t['title']}",
             "Gist 🎯": t["gist"],
             "In plain words 🗣️": t["plain"],
+            "Intuition tip 🧠": TIPS[t["title"]][0],
             "Experiment 🧪": t["experiments"][0][1],
             "Do first ✅": f"{t['actions'][0][0]}: {t['actions'][0][1]}",
             "Track 📏": t["metric"],
@@ -247,6 +318,20 @@ def render_cheatsheet():
 
     st.subheader("🔢 Key numbers")
     st.dataframe([{"Stage": s["name"], "Number": s["key_number"][0], "Meaning": s["key_number"][1]} for s in STAGES], hide_index=True, width="stretch")
+
+    st.subheader("📊 KPI library")
+    kpis = [{"Stage": s["name"], "KPI": k, "How to calculate": f, "Good sign": g} for s in STAGES for k, f, g in PRACTICE[s["title"]]["kpis"]]
+    st.dataframe(kpis, hide_index=True, width="stretch")
+    st.download_button("⬇️ Download KPI library (CSV)", to_csv(kpis), file_name="ai-ml-tpm-kpis.csv", mime="text/csv")
+
+    st.subheader("🛠️ Practice projects")
+    st.dataframe([{"Stage": s["name"], "Worked project": PRACTICE[s["title"]]["project"]["title"], "Lab": LABS[s["title"]][0],
+                   "Your turn": PRACTICE[s["title"]]["project"]["your_turn"]} for s in STAGES], hide_index=True, width="stretch")
+
+    st.subheader("⚠️ Common mistakes, all stages")
+    mistakes = [{"Stage": s["name"], "Mistake": m, "Why it hurts": w, "Fix": f} for s in STAGES for m, w, f in PRACTICE[s["title"]]["mistakes"]]
+    st.dataframe(mistakes, hide_index=True, width="stretch", height=400)
+    st.download_button("⬇️ Download mistakes checklist (CSV)", to_csv(mistakes), file_name="ai-ml-tpm-mistakes.csv", mime="text/csv")
 
     st.subheader("🔤 Glossary")
     term = st.text_input("Filter terms", placeholder="e.g. RAG, drift, token")
@@ -281,6 +366,8 @@ def render_topic(s, t):
     st.info(f"💡 **Example:** {t['example']}")
     st.markdown("#### 🔑 Key insights")
     st.markdown("\n".join(f"{n}. {x}" for n, x in enumerate(t["insights"], 1)))
+    st.markdown("#### 🧠 Intuition tips")
+    st.markdown("\n".join(f"- 💡 {tip}" for tip in TIPS[t["title"]]))
     st.markdown("#### 🧪 Experiments to try")
     cols = st.columns(len(t["experiments"]))
     for col, (name, how) in zip(cols, t["experiments"]):
@@ -316,6 +403,7 @@ def render_stage(index):
         with tab:
             render_topic(s, t)
     show(s["title"], [t["title"] for t in s["topics"]])
+    render_practice(s)
     prev_col, next_col = st.columns(2)
     if index > 0:
         prev_col.button("← Previous stage", on_click=go_to, args=(STAGE_NAMES[index - 1],), width="stretch")
@@ -323,6 +411,34 @@ def render_stage(index):
         next_col.button("Next stage →", on_click=go_to, args=(STAGE_NAMES[index + 1],), type="primary", width="stretch")
     else:
         next_col.button("Build my learning plan →", on_click=go_to, args=(PLAN,), type="primary", width="stretch")
+
+
+def render_practice(s):
+    """Bottom of every stage: KPIs, an interactive lab, a worked project, a 'your turn' project and common mistakes."""
+    p = PRACTICE[s["title"]]
+    st.divider()
+    st.subheader("📊 KPIs to track at this stage")
+    st.dataframe([{"KPI": k, "How to calculate": f, "Good sign": g} for k, f, g in p["kpis"]], hide_index=True, width="stretch")
+
+    lab_title, lab = LABS[s["title"]]
+    st.subheader(f"🔬 Interactive lab: {lab_title}")
+    with st.container(border=True):
+        lab()
+
+    pr = p["project"]
+    st.subheader(f"🛠️ Worked project: {pr['title']}")
+    st.markdown(f"🎯 **Goal:** {pr['goal']}  \n🧰 **Typical stack:** {pr['stack']}")
+    st.dataframe([{"Step": f"{i}. {name}", "What was done": how} for i, (name, how) in enumerate(pr["steps"], 1)], hide_index=True, width="stretch")
+    cols = st.columns(len(pr["results"]))
+    for col, (label, value) in zip(cols, pr["results"]):
+        col.metric(label, value)
+    st.caption("A typical implementation written as a teaching example; numbers are illustrative, not from a specific company.")
+    with st.container(border=True):
+        st.markdown(f"🔁 **Your turn: {pr['your_turn']}**")
+        st.markdown("\n".join(f"{i}. {step}" for i, step in enumerate(pr["your_steps"], 1)))
+
+    st.subheader("⚠️ Most common mistakes and how to fix them")
+    st.dataframe([{"Mistake": m, "Why it hurts": w, "How to fix or manage it": f} for m, w, f in p["mistakes"]], hide_index=True, width="stretch")
 
 
 def render_library():
@@ -366,7 +482,7 @@ def render_certs():
     rows = [{"Level": r["level"], "Certification": r["title"], "Issuer": r["by"], "Exam fee": r["cost"], "Prep ≈ h": r["hours"], "What it proves": r["gist"], "Official page": r["link"]} for r in certs]
     st.dataframe(rows, hide_index=True, width="stretch", column_config=link_cfg("Official page"))
     priced = [r for r in certs if r["cost_usd"]]
-    st.bar_chart({"Certification": [r["title"].split(" (")[0] for r in priced], "Exam fee ≈ USD": [r["cost_usd"] for r in priced]}, x="Certification", y="Exam fee ≈ USD", horizontal=True)
+    bar_chart({"Certification": [r["title"].split(" (")[0] for r in priced], "Exam fee ≈ USD": [r["cost_usd"] for r in priced]}, x="Certification", y="Exam fee ≈ USD", horizontal=True)
     st.subheader("🧭 A suggested order for an AI/ML TPM")
     path = ["x_gcpgenai", "x_awsaip", "x_cpmai", "x_awsmle", "x_aigp"]
     show("Certification path", [RESOURCES[k]["title"].split(" (")[0] for k in path])
@@ -387,13 +503,34 @@ def render_certs():
             resource_card(r, "certs")
 
 
+def render_quiz_stats():
+    stats = st.session_state.quiz_stats
+    if not stats:
+        return
+    st.subheader("📊 My accuracy by stage")
+    names = [n for n in STAGE_NAMES if n in stats]
+    bar_chart({"Stage": names, "Accuracy": [stats[n][0] / stats[n][1] for n in names]}, x="Stage", y="Accuracy", horizontal=True)
+    weakest = min(names, key=lambda n: stats[n][0] / stats[n][1])
+    st.caption(f"Weakest so far: **{weakest}**. Revisit its concepts, then retry your missed questions.")
+
+
 def render_quiz():
     st.header("📝 Quiz center")
-    st.caption("Pick stages, answer, then check. Each new set draws a fresh random mix of questions. Scores stay in this browser session only.")
+    st.caption("Pick stages, answer, then check. Each new set draws a fresh random mix. Questions you miss go to a review list so you can retry them (spaced practice).")
+    missed = st.session_state.missed
+    mode = st.segmented_control("Mode", ["🎲 New mix", f"🔁 My missed questions ({len(missed)})"], default="🎲 New mix", key="quiz_mode")
+    review = bool(mode) and mode.startswith("🔁")
     a, b = st.columns([3, 1])
     stages = a.multiselect("Stages", STAGE_NAMES, key="quiz_stages", placeholder="All stages")
     count = b.slider("Questions", 5, 30, 10)
-    pool = [item for item in QUESTIONS if not stages or item["stage"] in stages]
+    pool = [item for item in QUESTIONS if (not stages or item["stage"] in stages) and (not review or item["q"] in missed)]
+    if not pool:
+        if review:
+            st.success("🎉 No missed questions to review here. Take a new mix.")
+        else:
+            st.info("No questions match. Clear the stage filter.")
+        render_quiz_stats()
+        return
     rng = random.Random(st.session_state.quiz_seed)
     items = rng.sample(pool, min(count, len(pool)))
     st.button("🔀 New question set", on_click=new_quiz)
@@ -407,21 +544,32 @@ def render_quiz():
             st.radio(f"**Q{i + 1}.** {item['q']}", options, index=None, key=f"quiz_{seed}_{i}")
         submitted = st.form_submit_button("✅ Check my answers", type="primary")
     if not submitted:
+        render_quiz_stats()
         return
     picks = [st.session_state.get(f"quiz_{seed}_{i}") for i in range(len(items))]
     score = quiz_score(items, picks)
     st.session_state.quiz_history.append((score, len(items)))
-    x, y, z = st.columns(3)
+    for item, pick, (options, answer) in zip(items, picks, shown):
+        right = pick == options[answer]
+        if right:
+            missed.discard(item["q"])
+        else:
+            missed.add(item["q"])
+        correct, total = st.session_state.quiz_stats.get(item["stage"], (0, 0))
+        st.session_state.quiz_stats[item["stage"]] = (correct + right, total + 1)
+    x, y, z, w = st.columns(4)
     x.metric("Score", f"{score} / {len(items)}")
     y.metric("Percent", f"{score / len(items):.0%}")
     z.metric("Unanswered", sum(1 for p in picks if p is None))
+    w.metric("In review list", len(missed))
     if score / len(items) >= 0.8:
         st.success("🎉 Strong result. Move to the next stage, or try a harder set.")
     else:
-        st.info("📖 Review the concepts you missed below, then take a new set.")
+        st.info("📖 Review the concepts you missed below, then retry them with 'My missed questions'.")
     for i, (item, pick, (options, answer)) in enumerate(zip(items, picks, shown), 1):
         mark = "✅" if pick == options[answer] else "❌"
         st.markdown(f"{mark} **Q{i}. {item['q']}**  \nAnswer: **{options[answer]}**. {item['why']}  \n_Review: {item['stage']} → {item['topic']}_")
+    render_quiz_stats()
 
 
 def render_plan():
@@ -452,7 +600,7 @@ def render_plan():
         row["Done ✅"] = "✅" if key in st.session_state.finished else ""
         row["Open"] = RESOURCES[key]["link"]
     st.dataframe(rows, hide_index=True, width="stretch", column_config=link_cfg())
-    st.bar_chart({"Resource": [r["Resource"] for r in rows], "Hours ≈": [r["Hours (≈)"] for r in rows]}, x="Resource", y="Hours ≈", horizontal=True)
+    bar_chart({"Resource": [r["Resource"] for r in rows], "Hours ≈": [r["Hours (≈)"] for r in rows]}, x="Resource", y="Hours ≈", horizontal=True)
     st.download_button("⬇️ Download my plan (CSV)", to_csv(rows), file_name="my-ai-ml-learning-plan.csv", mime="text/csv", type="primary")
 
 
@@ -467,7 +615,7 @@ def calc_precision():
     cols = st.columns(5)
     for col, (name, key) in zip(cols, [("Accuracy", "accuracy"), ("Precision", "precision"), ("Recall", "recall"), ("F1", "f1"), ("Specificity", "specificity")]):
         col.metric(name, pct(m[key]))
-    st.bar_chart({"Metric": ["Accuracy", "Precision", "Recall", "F1"], "Value": [m[k] or 0 for k in ("accuracy", "precision", "recall", "f1")]}, x="Metric", y="Value")
+    bar_chart({"Metric": ["Accuracy", "Precision", "Recall", "F1"], "Value": [m[k] or 0 for k in ("accuracy", "precision", "recall", "f1")]}, x="Metric", y="Value")
     total = tp + fp + fn + tn
     if total and (tp + fn) / total < 0.05:
         st.warning(f"Only {(tp + fn) / total:.1%} of cases are positive. Always predicting 'no' would score {pct((fp + tn) / total)} accuracy, so judge by precision and recall.")
@@ -493,7 +641,7 @@ def calc_llm_cost():
     z.metric("Per month", f"${c['per_month']:,.0f}")
     w.metric("Per year", f"${c['per_year']:,.0f}")
     growth = [1, 2, 5, 10]
-    st.bar_chart({"Traffic": [f"{g}×" for g in growth], "Monthly cost ($)": [c["per_month"] * g for g in growth]}, x="Traffic", y="Monthly cost ($)")
+    bar_chart({"Traffic": [f"{g:02}×" for g in growth], "Monthly cost ($)": [c["per_month"] * g for g in growth]}, x="Traffic", y="Monthly cost ($)")
     st.caption("Assumes cached input is billed at a 90% discount, a common level for prompt caching. Excludes hosting, engineering and eval costs.")
 
 
@@ -527,7 +675,7 @@ def calc_gpu():
     y.metric("Inference ≈ (+20%)", f"{total:,.1f} GB", help="Rough allowance for activations and KV cache; long contexts need more")
     z.metric(f"GPUs of {gpu} GB to serve", gpus_needed(total, gpu))
     st.metric("Full fine-tuning ≈ (16 bytes/param)", f"{train:,.0f} GB · {gpus_needed(train, gpu)} GPUs")
-    st.bar_chart({"Precision": ["16-bit", "8-bit", "4-bit"], "Weights GB": [params * 2, params * 1, params * 0.5]}, x="Precision", y="Weights GB")
+    bar_chart({"Precision": ["16-bit", "8-bit", "4-bit"], "Weights GB": [params * 2, params * 1, params * 0.5]}, x="Precision", y="Weights GB")
     st.caption("Back-of-envelope only. Real needs depend on context length, batch size, framework and parallelism. Parameter-efficient fine-tuning needs far less memory.")
 
 
@@ -547,7 +695,7 @@ def calc_ab():
     y.metric("Total users", f"{2 * n:,}")
     z.metric("Days needed", f"{2 * n / traffic:,.1f}")
     lifts = [5, 10, 20, 30, 50]
-    st.bar_chart({"Relative lift (%)": [str(m) for m in lifts], "Users per variant": [ab_sample_size(base, m, alpha, power) for m in lifts]}, x="Relative lift (%)", y="Users per variant")
+    bar_chart({"Relative lift (%)": lifts, "Users per variant": [ab_sample_size(base, m, alpha, power) for m in lifts]}, x="Relative lift (%)", y="Users per variant")
     st.caption("Two-sided test of two proportions. Run for whole weeks to cover weekday patterns, and decide the duration before you start.")
 
 
@@ -592,11 +740,29 @@ def calc_study():
     b.metric("Weeks to finish", f"{weeks:.0f}")
     c.metric("Finish date", (date.today() + timedelta(weeks=weeks)).strftime("%b %Y"))
     options = [2, 3, 5, 8, 10, 15]
-    st.bar_chart({"Hours per week": [str(h) for h in options], "Weeks": [weeks_to_finish(total, h) for h in options]}, x="Hours per week", y="Weeks")
+    bar_chart({"Hours per week": options, "Weeks": [weeks_to_finish(total, h) for h in options]}, x="Hours per week", y="Weeks")
     st.caption("Sustainable beats intense: 5 steady hours a week finishes the path in about half a year without burnout.")
 
 
-CALC_FUNCS = dict(zip(CALCS, [calc_precision, calc_llm_cost, calc_tokens, calc_gpu, calc_ab, calc_roi, calc_agent, calc_study]))
+def calc_review_load():
+    st.caption("How many people are needed to review the AI's low-confidence or flagged cases (human in the loop).")
+    a, b = st.columns(2)
+    volume = a.number_input("Items per day", 1, 10_000_000, 5_000)
+    share = a.slider("Share sent to human review (%)", 0.0, 100.0, 15.0, 0.5)
+    minutes = b.number_input("Minutes per review", 0.1, 120.0, 2.0, 0.5)
+    hours_per_person = b.number_input("Productive review hours per person per day", 1.0, 8.0, 6.0, 0.5)
+    reviews, hours, people = review_load(volume, share, minutes, hours_per_person)
+    x, y, z = st.columns(3)
+    x.metric("Reviews per day", f"{reviews:,.0f}")
+    y.metric("Review hours per day", f"{hours:,.1f}")
+    z.metric("Reviewers needed", f"{people:,.1f}")
+    shares = [5, 10, 15, 25, 40]
+    bar_chart({"Share reviewed (%)": shares, "Reviewers needed": [review_load(volume, v, minutes, hours_per_person)[2] for v in shares]},
+                 x="Share reviewed (%)", y="Reviewers needed")
+    st.caption("Raising the model's confidence threshold cuts review load but lets more errors through: tune it with the threshold lab in Measuring models.")
+
+
+CALC_FUNCS = dict(zip(CALCS, [calc_precision, calc_llm_cost, calc_tokens, calc_gpu, calc_ab, calc_roi, calc_agent, calc_study, lab_schedule, calc_review_load]))
 
 
 def render_calculators():
@@ -607,6 +773,37 @@ def render_calculators():
         st.info("Pick a calculator above.")
     else:
         CALC_FUNCS[tool]()
+
+
+def render_search():
+    st.header("🔎 Search everything")
+    query = st.text_input("Search concepts, tips, mistakes, glossary and resources", placeholder="e.g. drift, threshold, RAG, overfitting").strip().lower()
+    if len(query) < 2:
+        st.info("Type at least two letters.")
+        return
+    concepts = [(s, t) for s, t in TOPICS if query in " ".join([t["title"], t["gist"], t["plain"], t["example"], *t["insights"], *TIPS[t["title"]]]).lower()]
+    mistakes = [(s, m) for s in STAGES for m in PRACTICE[s["title"]]["mistakes"] if query in " ".join(m).lower()]
+    terms = [(t, m) for t, m in GLOSSARY if query in (t + " " + m).lower()]
+    found = [r for r in RESOURCES.values() if query in " ".join([r["title"], r["by"], r["gist"], *r["ideas"]]).lower()]
+    a, b, c, d = st.columns(4)
+    a.metric("Concepts", len(concepts))
+    b.metric("Mistakes", len(mistakes))
+    c.metric("Glossary terms", len(terms))
+    d.metric("Resources", len(found))
+    for s, t in concepts:
+        with st.container(border=True):
+            st.markdown(f"**{t['icon']} {t['title']}** · {s['name']} · {s['level']}  \n🎯 {t['gist']}")
+            st.button("Open stage →", key=f"search_{t['title']}", on_click=go_to, args=(s["name"],))
+    if mistakes:
+        st.subheader("⚠️ Mistakes")
+        st.dataframe([{"Stage": s["name"], "Mistake": m, "Fix": f} for s, (m, _, f) in mistakes], hide_index=True, width="stretch")
+    if terms:
+        st.subheader("🔤 Glossary")
+        st.dataframe([{"Term": t, "Meaning": m} for t, m in terms], hide_index=True, width="stretch")
+    if found:
+        st.subheader("📚 Resources")
+        st.dataframe([{"Type": KINDS[r["kind"]], "Resource": r["title"], "Gist": r["gist"], "Open": r["link"]} for r in found],
+                     hide_index=True, width="stretch", column_config=link_cfg())
 
 
 def render_about():
@@ -653,6 +850,8 @@ elif section == PLAN:
     render_plan()
 elif section == CALCULATORS:
     render_calculators()
+elif section == SEARCH:
+    render_search()
 else:
     render_about()
 

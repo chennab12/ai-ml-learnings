@@ -3,6 +3,8 @@ from collections import Counter
 
 from calculations import shuffled_options
 from content import FAST_TRACK, GLOSSARY, SKILL_LADDER, STAGE_LEVELS, STAGES
+from lab_pages import LABS
+from practice import PRACTICE, TIPS
 from resources import KINDS, LEVELS, RESOURCES
 
 
@@ -79,3 +81,20 @@ def test_titles_and_glossary_are_unique():
     terms = [term for term, _ in GLOSSARY]
     assert len(terms) == len(set(terms)) and len(terms) >= 30
     assert all(len(row) == 4 for row in SKILL_LADDER)
+
+
+def test_every_stage_has_practice_layer():
+    titles = {s["title"] for s in STAGES}
+    assert set(PRACTICE) == titles and set(LABS) == titles
+    for s in STAGES:
+        p = PRACTICE[s["title"]]
+        assert len(p["kpis"]) >= 3 and all(len(k) == 3 for k in p["kpis"]), s["title"]
+        assert len(p["mistakes"]) >= 5 and all(len(m) == 3 for m in p["mistakes"]), s["title"]
+        pr = p["project"]
+        assert pr["title"] and pr["goal"] and pr["stack"] and pr["your_turn"], s["title"]
+        assert len(pr["steps"]) >= 5 and len(pr["your_steps"]) >= 3 and pr["results"], s["title"]
+
+
+def test_every_concept_has_tips():
+    assert set(TIPS) == {t["title"] for t in all_topics()}
+    assert all(len(v) >= 2 for v in TIPS.values())
