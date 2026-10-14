@@ -29,6 +29,7 @@ from calculations import (
 from content import FAST_TRACK, GLOSSARY, REVIEWED, SKILL_LADDER, STAGE_LEVELS, STAGES, TOP_20_NOTE
 from lab_pages import LABS, lab_schedule
 from practice import PRACTICE, TIPS
+from prerequisites import PREREQS
 from resources import KINDS, LEVELS, RESOURCES
 from visuals import show
 
@@ -328,6 +329,11 @@ def render_cheatsheet():
     st.dataframe([{"Stage": s["name"], "Worked project": PRACTICE[s["title"]]["project"]["title"], "Lab": LABS[s["title"]][0],
                    "Your turn": PRACTICE[s["title"]]["project"]["your_turn"]} for s in STAGES], hide_index=True, width="stretch")
 
+    st.subheader("🧩 Prerequisites, all stages")
+    prereqs = [{"Stage": s["name"], **{k: v for k, v in row.items() if k != "Open"}} for s in STAGES for row in prereq_rows(s)]
+    st.dataframe(prereqs, hide_index=True, width="stretch", height=400)
+    st.download_button("⬇️ Download prerequisites (CSV)", to_csv(prereqs), file_name="ai-ml-tpm-prerequisites.csv", mime="text/csv")
+
     st.subheader("⚠️ Common mistakes, all stages")
     mistakes = [{"Stage": s["name"], "Mistake": m, "Why it hurts": w, "Fix": f} for s in STAGES for m, w, f in PRACTICE[s["title"]]["mistakes"]]
     st.dataframe(mistakes, hide_index=True, width="stretch", height=400)
@@ -439,6 +445,40 @@ def render_practice(s):
 
     st.subheader("⚠️ Most common mistakes and how to fix them")
     st.dataframe([{"Mistake": m, "Why it hurts": w, "How to fix or manage it": f} for m, w, f in p["mistakes"]], hide_index=True, width="stretch")
+    render_prerequisites(s)
+
+
+def prereq_rows(s):
+    """Prerequisite table rows; 'learn' is either an earlier stage title or a resource key."""
+    rows = []
+    for r in PREREQS[s["title"]]:
+        stage = next((x for x in STAGES if x["title"] == r["learn"]), None)
+        res = RESOURCES.get(r["learn"])
+        rows.append({
+            "Prerequisite": r["topic"],
+            "Core concepts to know": r["core"],
+            "TPM takeaway 🎯": r["takeaway"],
+            "Where to learn it": f"↩️ Stage: {stage['name']}" if stage else f"{KINDS[res['kind']].split()[0]} {res['title']}",
+            "Open": None if stage else res["link"],
+        })
+    return rows
+
+
+def render_prerequisites(s):
+    st.subheader("🧩 Prerequisites for this stage")
+    st.caption("What to know before (or alongside) this stage, the core ideas in one line, where to learn them, and what it means for you as a TPM.")
+    st.dataframe(prereq_rows(s), hide_index=True, width="stretch", column_config={
+        **link_cfg(),
+        "Prerequisite": st.column_config.TextColumn(width="medium"),
+        "Core concepts to know": st.column_config.TextColumn(width="large"),
+        "TPM takeaway 🎯": st.column_config.TextColumn(width="large"),
+        "Open": st.column_config.LinkColumn("Open", display_text="Open ↗", width="small"),
+    })
+    earlier = [x for x in STAGES if x["title"] in {r["learn"] for r in PREREQS[s["title"]]}]
+    if earlier:
+        cols = st.columns(len(earlier))
+        for col, x in zip(cols, earlier):
+            col.button(f"↩️ Review {x['name']}", key=f"prereq_{s['title']}_{x['title']}", on_click=go_to, args=(x["name"],), width="stretch")
 
 
 def render_library():
