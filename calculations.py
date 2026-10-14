@@ -89,6 +89,13 @@ def compound_success(step_success_pct, steps):
     return (step_success_pct / 100) ** steps
 
 
+def review_load(items_per_day, review_share_pct, minutes_per_review, hours_per_person=6.0):
+    """(reviews per day, review hours per day, reviewers needed) for human-in-the-loop review."""
+    reviews = items_per_day * review_share_pct / 100
+    hours = reviews * minutes_per_review / 60
+    return reviews, hours, hours / hours_per_person if hours_per_person > 0 else None
+
+
 def weeks_to_finish(total_hours, hours_per_week):
     return total_hours / hours_per_week if hours_per_week > 0 else None
 

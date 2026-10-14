@@ -11,6 +11,7 @@ from calculations import (
     model_memory_gb,
     project_roi,
     quiz_score,
+    review_load,
     shuffled_options,
     study_schedule,
     tokens_to_words,
@@ -99,3 +100,8 @@ def test_quiz_score():
     items = [{"options": ["x", "y"], "answer": 1}, {"options": ["x", "y"], "answer": 0}]
     assert quiz_score(items, ["y", "x"]) == 2
     assert quiz_score(items, ["x", None]) == 0
+
+
+def test_review_load():
+    reviews, hours, people = review_load(6000, 10, 3, 6)
+    assert reviews == 600 and hours == 30 and people == 5
